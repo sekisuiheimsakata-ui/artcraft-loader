@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VectorCraft ローカル起動</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2em auto; max-width: 640px; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.3em; }
+  #status { margin-top: 1em; white-space: pre-wrap; }
+  button { font-size: 1em; padding: 0.5em 1em; }
+  .note { color: #555; font-size: 0.9em; }
+</style>
+</head>
+<body>
+<h1>VectorCraft をローカルの zip から起動</h1>
+<p>このページ自体には VectorCraft の本体は含まれていません。お手元の公式 zip（vectorcraft-web-0.19.0.zip）を選ぶと、ブラウザの中でだけ解凍し、このブラウザのキャッシュに置いて起動します。zip の中身がサーバーに送られることはありません。</p>
+<p><input type="file" id="zipfile" accept=".zip"></p>
+<p><button id="start" disabled>解凍して起動する</button></p>
+<p id="status">zip ファイルを選んでください。</p>
+<p class="note">公式 zip の SHA-256 は d9c7a2695d15f83a268b1be3be94592db4beb04326825e174cb5e3cb239c64d6 です。合わない場合は警告を出しますが、起動自体は止めません。</p>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const OFFICIAL_SHA256 = "d9c7a2695d15f83a268b1be3be94592db4beb04326825e174cb5e3cb239c64d6";
+const statusEl = document.getElementById("status");
+const startBtn = document.getElementById("start");
+const fileInput = document.getElementById("zipfile");
+let zipBuffer = null;
+function log(s) { statusEl.textContent = s; }
+function mimeFor(name) {
+  if (name.endsWith(".wasm")) return "application/wasm";
+  if (name.endsWith(".js")) return "text/javascript";
+  if (name.endsWith(".html")) return "text/html";
+  if (name.endsWith(".css")) return "text/css";
+  if (name.endsWith(".ttf")) return "font/ttf";
+  if (name.endsWith(".svg")) return "image/svg+xml";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".json")) return "application/json";
+  return "application/octet-stream";
+}
+fileInput.addEventListener("change", async () => {
+  const f = fileInput.files[0];
+  if (!f) return;
+  zipBuffer = await f.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", zipBuffer);
+  const hex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+  log("選択: " + f.name + " (" + f.size + " bytes)\nSHA-256: " + hex + "\n" +
+      (hex === OFFICIAL_SHA256 ? "公式 zip と一致しました。" : "警告: 公式 zip のハッシュと一致しません。"));
+  startBtn.disabled = false;
+});
+startBtn.addEventListener("click", async () => {
+  try {
+    log("解凍中…");
+    const zip = await JSZip.loadAsync(zipBuffer);
+    const entries = Object.keys(zip.files).filter(n => !zip.files[n].dir);
+    // zip の直下は vectorcraft-web-0.19.0/ フォルダ。app/ 以下に置き直す。
+    const cache = await caches.open("vectorcraft-local");
+    let count = 0;
+    for (const name of entries) {
+      const rel = name.replace(/^[^/]+\//, "");
+      if (!rel) continue;
+      const buf = await zip.files[name].async("arraybuffer");
+      const resp = new Response(buf, { headers: { "Content-Type": mimeFor(rel), "Cache-Control": "public, max-age=31536000" } });
+      await cache.put(new Request("app/" + rel), resp);
+      count++;
+    }
+    log("解凍完了: " + count + " ファイルをブラウザのキャッシュに置きました。Service Worker を登録します…");
+    const reg = await navigator.serviceWorker.register("sw.js", { scope: "./" });
+    await navigator.serviceWorker.ready;
+    log("起動します…");
+    location.href = "app/index.html";
+  } catch (e) {
+    log("失敗: " + (e && e.message ? e.message : e));
+  }
+});
+</script>
+</body>
+</html>
