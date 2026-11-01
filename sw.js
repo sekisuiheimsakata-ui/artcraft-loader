@@ -1,6 +1,6 @@
-// VectorCraft local launcher service worker.
+// ArtCraft local launcher service worker.
 // Serves only files the user unzipped locally into Cache Storage.
-// Nothing of VectorCraft is hosted by this page itself.
+// Nothing of ArtCraft is hosted by this page itself.
 self.addEventListener("install", (e) => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener("fetch", (e) => {
@@ -8,7 +8,7 @@ self.addEventListener("fetch", (e) => {
   // app/ is the virtual path for the unzipped build.
   if (url.pathname.includes("/app/")) {
     e.respondWith((async () => {
-      const cache = await caches.open("vectorcraft-local");
+      const cache = await caches.open("artcraft-local");
       // Cache keys are stored as "app/<relative path>".
       const idx = url.pathname.indexOf("/app/");
       const key = url.pathname.slice(idx + 1) + url.search;

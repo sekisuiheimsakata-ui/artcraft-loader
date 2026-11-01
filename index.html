@@ -3,33 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VectorCraft ローカル起動</title>
+<title>ArtCraft ローカル起動</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 2em auto; max-width: 640px; padding: 0 1em; color: #222; }
+  body { font-family: system-ui, sans-serif; margin: 2em auto; max-width: 680px; padding: 0 1em; color: #222; }
   h1 { font-size: 1.3em; }
-  #status { margin-top: 1em; white-space: pre-wrap; }
-  button { font-size: 1em; padding: 0.5em 1em; }
+  #status { margin-top: 1em; white-space: pre-wrap; word-break: break-all; }
+  button, input[type="text"] { font-size: 1em; padding: 0.5em; }
+  input[type="text"] { width: 100%; box-sizing: border-box; }
   .note { color: #555; font-size: 0.9em; }
 </style>
 </head>
 <body>
-<h1>VectorCraft をローカルの zip から起動</h1>
-<p>このページ自体には VectorCraft の本体は含まれていません。お手元の公式 zip（vectorcraft-web-0.19.0.zip）を選ぶと、ブラウザの中でだけ解凍し、このブラウザのキャッシュに置いて起動します。zip の中身がサーバーに送られることはありません。</p>
+<h1>ArtCraft をローカルの zip から起動</h1>
+<p>このページ自体には ArtCraft の本体は含まれていません。お手元の公式 Web 版 zip（例: vectorcraft-web-0.19.0.zip）を選ぶと、ブラウザの中でだけ解凍し、このブラウザのキャッシュに置いて起動します。zip の中身がサーバーに送られることはありません。特定のアプリ専用ではなく、index.html を含む静的サイトの zip なら汎用的に開けます。</p>
 <p><input type="file" id="zipfile"></p>
+<p>期待する SHA-256（任意。入力すると照合します）:<br><input type="text" id="expectedHash" placeholder="例: d9c7a2695d15f83a268b1be3be94592db4beb04326825e174cb5e3cb239c64d6"></p>
 <p><button id="start" disabled>解凍して起動する</button></p>
 <p id="status">zip ファイルを選んでください。</p>
-<p class="note">公式 zip の SHA-256 は d9c7a2695d15f83a268b1be3be94592db4beb04326825e174cb5e3cb239c64d6 です。合わない場合は警告を出しますが、起動自体は止めません。</p>
+<p class="note">バージョンアップするときは、新しいバージョンの zip を選び直してください。古いキャッシュは消してから新しいものを置き直します。選んだ zip の SHA-256 は画面に表示するので、公式リリースのハッシュと見比べられます。</p>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-window.addEventListener("load", () => {
-  const el = document.getElementById("status");
-  el.textContent = "ページ読み込み完了。JSZip: " + (typeof JSZip !== "undefined" ? "読み込み済み" : "読み込み失敗（通信を確認して再読み込みしてください）") + "\nzip ファイルを選んでください。";
-});
-const OFFICIAL_SHA256 = "d9c7a2695d15f83a268b1be3be94592db4beb04326825e174cb5e3cb239c64d6";
 const statusEl = document.getElementById("status");
 const startBtn = document.getElementById("start");
 const fileInput = document.getElementById("zipfile");
+const expectedInput = document.getElementById("expectedHash");
 let zipBuffer = null;
+let zipHash = "";
 function log(s) { statusEl.textContent = s; }
 function mimeFor(name) {
   if (name.endsWith(".wasm")) return "application/wasm";
@@ -42,6 +41,9 @@ function mimeFor(name) {
   if (name.endsWith(".json")) return "application/json";
   return "application/octet-stream";
 }
+window.addEventListener("load", () => {
+  log("ページ読み込み完了。JSZip: " + (typeof JSZip !== "undefined" ? "読み込み済み" : "読み込み失敗（通信を確認して再読み込みしてください）") + "\nzip ファイルを選んでください。");
+});
 fileInput.addEventListener("change", async () => {
   const f = fileInput.files[0];
   if (!f) return;
@@ -50,9 +52,11 @@ fileInput.addEventListener("change", async () => {
   const isZip = magic[0] === 0x50 && magic[1] === 0x4b;
   if (!isZip) { log("このファイルは zip ではありません。先頭が zip の形式になっていません。"); startBtn.disabled = true; return; }
   const digest = await crypto.subtle.digest("SHA-256", zipBuffer);
-  const hex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
-  log("選択: " + f.name + " (" + f.size + " bytes)\nSHA-256: " + hex + "\n" +
-      (hex === OFFICIAL_SHA256 ? "公式 zip と一致しました。" : "警告: 公式 zip のハッシュと一致しません。"));
+  zipHash = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+  const expected = expectedInput.value.trim().toLowerCase();
+  let verdict = "";
+  if (expected) verdict = "\n照合: " + (zipHash === expected ? "一致しました。" : "警告: 入力したハッシュと一致しません。");
+  log("選択: " + f.name + " (" + f.size + " bytes)\nSHA-256: " + zipHash + verdict);
   startBtn.disabled = false;
 });
 startBtn.addEventListener("click", async () => {
@@ -61,12 +65,20 @@ startBtn.addEventListener("click", async () => {
     log("解凍中…");
     const zip = await JSZip.loadAsync(zipBuffer);
     const entries = Object.keys(zip.files).filter(n => !zip.files[n].dir);
-    log("解凍中… 対象 " + entries.length + " ファイル");
-    // zip の直下は vectorcraft-web-0.19.0/ フォルダ。app/ 以下に置き直す。
-    const cache = await caches.open("vectorcraft-local");
+    // index.html を自動検出。最も浅いものを入口にする。
+    const indexCandidates = entries.filter(n => n === "index.html" || n.endsWith("/index.html"));
+    if (!indexCandidates.length) throw new Error("この zip の中に index.html が見つかりませんでした。");
+    indexCandidates.sort((a, b) => a.split("/").length - b.split("/").length);
+    const indexEntry = indexCandidates[0];
+    const prefix = indexEntry.slice(0, indexEntry.length - "index.html".length);
+    log("入口: " + indexEntry + "\n解凍中… 対象 " + entries.length + " ファイル");
+    // バージョンアップ対応: 古いキャッシュを消してから置き直す。
+    await caches.delete("artcraft-local");
+    const cache = await caches.open("artcraft-local");
     let count = 0;
     for (const name of entries) {
-      const rel = name.replace(/^[^/]+\//, "");
+      if (!name.startsWith(prefix)) continue;
+      const rel = name.slice(prefix.length);
       if (!rel) continue;
       const buf = await zip.files[name].async("arraybuffer");
       const resp = new Response(buf, { headers: { "Content-Type": mimeFor(rel), "Cache-Control": "public, max-age=31536000" } });
@@ -74,8 +86,8 @@ startBtn.addEventListener("click", async () => {
       count++;
       if (count % 10 === 0) log("解凍中… " + count + " / " + entries.length + " ファイル");
     }
-    log("解凍完了: " + count + " ファイルをブラウザのキャッシュに置きました。Service Worker を登録します…");
-    const reg = await navigator.serviceWorker.register("sw.js", { scope: "./" });
+    log("解凍完了: " + count + " ファイルをブラウザのキャッシュに置きました。\nSHA-256: " + zipHash + "\nService Worker を登録します…");
+    await navigator.serviceWorker.register("sw.js", { scope: "./" });
     await navigator.serviceWorker.ready;
     log("起動します…");
     location.href = "app/index.html";
