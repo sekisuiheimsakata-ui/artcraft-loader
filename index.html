@@ -21,6 +21,10 @@
 <p class="note">公式 zip の SHA-256 は d9c7a2695d15f83a268b1be3be94592db4beb04326825e174cb5e3cb239c64d6 です。合わない場合は警告を出しますが、起動自体は止めません。</p>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
+window.addEventListener("load", () => {
+  const el = document.getElementById("status");
+  el.textContent = "ページ読み込み完了。JSZip: " + (typeof JSZip !== "undefined" ? "読み込み済み" : "読み込み失敗（通信を確認して再読み込みしてください）") + "\nzip ファイルを選んでください。";
+});
 const OFFICIAL_SHA256 = "d9c7a2695d15f83a268b1be3be94592db4beb04326825e174cb5e3cb239c64d6";
 const statusEl = document.getElementById("status");
 const startBtn = document.getElementById("start");
@@ -50,9 +54,11 @@ fileInput.addEventListener("change", async () => {
 });
 startBtn.addEventListener("click", async () => {
   try {
+    if (typeof JSZip === "undefined") throw new Error("JSZipが読み込めていません。ページを再読み込みしてください。");
     log("解凍中…");
     const zip = await JSZip.loadAsync(zipBuffer);
     const entries = Object.keys(zip.files).filter(n => !zip.files[n].dir);
+    log("解凍中… 対象 " + entries.length + " ファイル");
     // zip の直下は vectorcraft-web-0.19.0/ フォルダ。app/ 以下に置き直す。
     const cache = await caches.open("vectorcraft-local");
     let count = 0;
@@ -63,6 +69,7 @@ startBtn.addEventListener("click", async () => {
       const resp = new Response(buf, { headers: { "Content-Type": mimeFor(rel), "Cache-Control": "public, max-age=31536000" } });
       await cache.put(new Request("app/" + rel), resp);
       count++;
+      if (count % 10 === 0) log("解凍中… " + count + " / " + entries.length + " ファイル");
     }
     log("解凍完了: " + count + " ファイルをブラウザのキャッシュに置きました。Service Worker を登録します…");
     const reg = await navigator.serviceWorker.register("sw.js", { scope: "./" });
