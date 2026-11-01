@@ -17,6 +17,14 @@ self.addEventListener("fetch", (e) => {
         const legacy = await caches.open("vectorcraft-local");
         hit = await legacy.match(key) || await legacy.match(url.pathname.slice(idx + 1));
       }
+      if (!hit) {
+        // PhotoCraft の app/photocraft-web.js は ./snippets/... を
+        // app/ からの相対で読みに行くが、zip には snippets/ が
+        // ルートにしかない。app/app/snippets/... を app/snippets/... に
+        // 読み替えて、実在する方を返す。
+        const alt = key.replace(/^app\/app\//, "app/");
+        if (alt !== key) hit = await cache.match(alt);
+      }
       if (hit) return hit;
       return new Response("not found in local cache", { status: 404 });
     })());
