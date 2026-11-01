@@ -73,8 +73,11 @@ startBtn.addEventListener("click", async () => {
     const prefix = indexEntry.slice(0, indexEntry.length - "index.html".length);
     log("入口: " + indexEntry + "\n解凍中… 対象 " + entries.length + " ファイル");
     // バージョンアップ対応: 古いキャッシュを消してから置き直す。
+    // 旧版ローダーの Service Worker が残っている場合にも備え、両方のキャッシュに書く。
     await caches.delete("artcraft-local");
+    await caches.delete("vectorcraft-local");
     const cache = await caches.open("artcraft-local");
+    const legacyCache = await caches.open("vectorcraft-local");
     let count = 0;
     for (const name of entries) {
       if (!name.startsWith(prefix)) continue;
@@ -83,11 +86,20 @@ startBtn.addEventListener("click", async () => {
       const buf = await zip.files[name].async("arraybuffer");
       const resp = new Response(buf, { headers: { "Content-Type": mimeFor(rel), "Cache-Control": "public, max-age=31536000" } });
       await cache.put(new Request("app/" + rel), resp);
+      await legacyCache.put(new Request("app/" + rel), new Response(buf, { headers: { "Content-Type": mimeFor(rel), "Cache-Control": "public, max-age=31536000" } }));
       count++;
       if (count % 10 === 0) log("解凍中… " + count + " / " + entries.length + " ファイル");
     }
     log("解凍完了: " + count + " ファイルをブラウザのキャッシュに置きました。\nSHA-256: " + zipHash + "\nService Worker を登録します…");
-    await navigator.serviceWorker.register("sw.js", { scope: "./" });
+    const reg = await navigator.serviceWorker.register("sw.js", { scope: "./" });
+    // 旧版の Service Worker が残っていると、ready が旧版で解決して
+    // 新しいキャッシュを見に行かないことがある。新しい版が制御するまで待つ。
+    if (navigator.serviceWorker.controller !== reg.active) {
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, 3000);
+        navigator.serviceWorker.addEventListener("controllerchange", () => { clearTimeout(t); resolve(); }, { once: true });
+      });
+    }
     await navigator.serviceWorker.ready;
     log("起動します…");
     location.href = "app/index.html";

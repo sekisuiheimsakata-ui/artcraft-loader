@@ -12,7 +12,11 @@ self.addEventListener("fetch", (e) => {
       // Cache keys are stored as "app/<relative path>".
       const idx = url.pathname.indexOf("/app/");
       const key = url.pathname.slice(idx + 1) + url.search;
-      const hit = await cache.match(key) || await cache.match(url.pathname.slice(idx + 1));
+      let hit = await cache.match(key) || await cache.match(url.pathname.slice(idx + 1));
+      if (!hit) {
+        const legacy = await caches.open("vectorcraft-local");
+        hit = await legacy.match(key) || await legacy.match(url.pathname.slice(idx + 1));
+      }
       if (hit) return hit;
       return new Response("not found in local cache", { status: 404 });
     })());
