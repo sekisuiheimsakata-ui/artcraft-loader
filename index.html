@@ -15,7 +15,7 @@
 <body>
 <h1>VectorCraft をローカルの zip から起動</h1>
 <p>このページ自体には VectorCraft の本体は含まれていません。お手元の公式 zip（vectorcraft-web-0.19.0.zip）を選ぶと、ブラウザの中でだけ解凍し、このブラウザのキャッシュに置いて起動します。zip の中身がサーバーに送られることはありません。</p>
-<p><input type="file" id="zipfile" accept=".zip"></p>
+<p><input type="file" id="zipfile"></p>
 <p><button id="start" disabled>解凍して起動する</button></p>
 <p id="status">zip ファイルを選んでください。</p>
 <p class="note">公式 zip の SHA-256 は d9c7a2695d15f83a268b1be3be94592db4beb04326825e174cb5e3cb239c64d6 です。合わない場合は警告を出しますが、起動自体は止めません。</p>
@@ -46,6 +46,9 @@ fileInput.addEventListener("change", async () => {
   const f = fileInput.files[0];
   if (!f) return;
   zipBuffer = await f.arrayBuffer();
+  const magic = new Uint8Array(zipBuffer.slice(0, 4));
+  const isZip = magic[0] === 0x50 && magic[1] === 0x4b;
+  if (!isZip) { log("このファイルは zip ではありません。先頭が zip の形式になっていません。"); startBtn.disabled = true; return; }
   const digest = await crypto.subtle.digest("SHA-256", zipBuffer);
   const hex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
   log("選択: " + f.name + " (" + f.size + " bytes)\nSHA-256: " + hex + "\n" +
