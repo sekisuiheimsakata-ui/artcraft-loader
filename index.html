@@ -11,6 +11,10 @@
   button, input[type="text"] { font-size: 1em; padding: 0.5em; }
   input[type="text"] { width: 100%; box-sizing: border-box; }
   .note { color: #555; font-size: 0.9em; }
+  h2 { font-size: 1.1em; margin-top: 1.6em; }
+  .app-row { border-top: 1px solid #ddd; padding: 0.5em 0; }
+  .app-row a { margin-right: 0.9em; }
+  #latestStatus { margin-top: 0.6em; white-space: pre-wrap; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -21,6 +25,11 @@
 <p><button id="start" disabled>解凍して起動する</button></p>
 <p id="status">zip ファイルを選んでください。</p>
 <p class="note">バージョンアップするときは、新しいバージョンの zip を選び直してください。古いキャッシュは消してから新しいものを置き直します。選んだ zip の SHA-256 は画面に表示するので、公式リリースのハッシュと見比べられます。</p>
+<h2>最新版チェック（公式 GitHub）</h2>
+<p><button id="checkLatest">最新版を調べる</button></p>
+<p class="note">公式 GitHub（storytold）の Craft 系アプリを自動で探して最新版を調べ、Web版zipへの公式リンクを表示します。新しいアプリが増えても、公式に Web版zip付きで公開されれば一覧に自動で出ます。zip 本体は GitHub の配信仕様（CORS 許可ヘッダーなし）のためこのページの中へ直接は読み込めません。リンクからダウンロードして、上でファイルを選んで開いてください。</p>
+<p id="latestStatus"></p>
+<div id="latestList"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
 const statusEl = document.getElementById("status");
@@ -56,6 +65,7 @@ fileInput.addEventListener("change", async () => {
   const expected = expectedInput.value.trim().toLowerCase();
   let verdict = "";
   if (expected) verdict = "\n照合: " + (zipHash === expected ? "一致しました。" : "警告: 入力したハッシュと一致しません。");
+  try { localStorage.setItem("artcraft-loaded-info", JSON.stringify({ fileName: f.name, hash: zipHash, at: Date.now() })); } catch (e) {}
   log("選択: " + f.name + " (" + f.size + " bytes)\nSHA-256: " + zipHash + verdict);
   startBtn.disabled = false;
 });
@@ -106,6 +116,172 @@ startBtn.addEventListener("click", async () => {
   } catch (e) {
     log("失敗: " + (e && e.message ? e.message : e));
   }
+});
+</script>
+<script>
+// 最新版チェック: 公式 GitHub API (api.github.com) は CORS 許可があるため
+// ブラウザから直接引ける。zip 本体の配信ホストには許可がないため、
+// そこはダウンロードリンクの提示までにとどめる。
+// 土台は公式サイト (getartcraft.com) の /apps/ 一覧と各アプリページの
+// GitHub リンクを 2026-11-07 に調べて作った対応表 (OFFICIAL_APPS)。
+// 公式サイト自体は CORS 許可がなくブラウザから直接読めないため、
+// この表を埋め込み、その先の増加分は GitHub のリポジトリ一覧から
+// 自動発見で拾う: 名前が craft で終わる / craft- で始まるものを候補にし、
+// 最新リリースに <repo>-web-<版>.zip があるものだけを表示する。
+// 新しい Craft アプリが公式に出れば、次回チェックで自動で増える。
+const OFFICIAL_APPS = [
+  ["vectorcraft", "VectorCraft"], ["photocraft", "PhotoCraft"],
+  ["filmcraft", "FilmCraft"], ["lightcraft", "LightCraft"],
+  ["pdfcraft", "PdfCraft"], ["effectcraft", "EffectCraft"],
+  ["designcraft", "DesignCraft"], ["figcraft", "FigCraft"],
+  ["wordcraft", "WordCraft"], ["soundcraft", "SoundCraft"],
+  ["deckcraft", "DeckCraft"], ["cadcraft", "CADCraft"],
+  ["gridcraft", "GridCraft"], ["texturecraft", "TextureCraft"],
+  ["materialcraft", "MaterialCraft"], ["craft-anything", "Craft Anything"]
+];
+// アプリではないと確認済みの公式リポジトリ（発見候補から除く）。
+// ここに無い新しいリポジトリは候補に入り、Web版zip の有無で判定される。
+const NON_APP_REPOS = new Set([
+  "artcraft", "placeholder-artcraft", "craft-fonts", "craft-libs",
+  "craft-launcher", "craft-launcher-assets", "craft-repo-status-app",
+  "craft-ai-integrations", "craft-common-actions", "craft-contrib",
+  "craft-extensions", "craft-i18n", "craft-skills", "craft-wiki",
+  "craft-pr-review-tool", "crafthub", "photocraft-corpus",
+  "effectcraft-corpus", "cadcraft-corpus"
+]);
+const latestBtn = document.getElementById("checkLatest");
+const latestStatus = document.getElementById("latestStatus");
+const latestList = document.getElementById("latestList");
+function loadedInfo() {
+  try { return JSON.parse(localStorage.getItem("artcraft-loaded-info") || "null"); } catch (e) { return null; }
+}
+function displayNameFor(repo, description) {
+  if (description) {
+    const m = description.match(/^([A-Za-z][A-Za-z0-9]*[Cc]raft)\s*:/);
+    if (m) return m[1];
+  }
+  const lower = repo.toLowerCase();
+  const base = lower.endsWith("craft") ? lower.slice(0, -5) : lower;
+  return (base ? base.charAt(0).toUpperCase() + base.slice(1) : "") + "Craft";
+}
+async function discoverApps() {
+  // 失敗したら公式サイト調べの対応表だけにフォールバックする。
+  try {
+    const found = [];
+    for (let page = 1; page <= 5; page++) {
+      const res = await fetch("https://api.github.com/users/storytold/repos?per_page=100&page=" + page + "&sort=created&direction=asc", { headers: { "Accept": "application/vnd.github+json" } });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const repos = await res.json();
+      for (const r of repos) {
+        if (!r.name) continue;
+        const lower = r.name.toLowerCase();
+        if (!lower.endsWith("craft") && !/^craft-[a-z0-9-]+$/.test(lower)) continue;
+        if (r.archived || r.fork) continue;
+        if (NON_APP_REPOS.has(lower)) continue;
+        found.push({ repo: r.name, name: displayNameFor(r.name, r.description) });
+      }
+      if (repos.length < 100) break;
+    }
+    if (!found.length) throw new Error("empty");
+    // 公式表の順序を先に、残り（新しいアプリ）は発見順（作成順）に後ろへ。
+    const byLower = new Map(found.map(f => [f.repo.toLowerCase(), f]));
+    const ordered = [];
+    for (const [repo, name] of OFFICIAL_APPS) {
+      const hit = byLower.get(repo);
+      if (hit) { ordered.push({ repo: hit.repo, name }); byLower.delete(repo); }
+      else ordered.push({ repo, name });
+    }
+    for (const f of found) if (byLower.has(f.repo.toLowerCase())) ordered.push(f);
+    return ordered;
+  } catch (e) {
+    return OFFICIAL_APPS.map(([repo, name]) => ({ repo, name }));
+  }
+}
+function renderLatest(results, checkedAt) {
+  latestList.textContent = "";
+  const loaded = loadedInfo();
+  for (const r of results) {
+    const row = document.createElement("div");
+    row.className = "app-row";
+    const head = document.createElement("div");
+    const nameEl = document.createElement("strong");
+    nameEl.textContent = r.name;
+    head.appendChild(nameEl);
+    let headText = " 最新版 " + (r.version || "取得失敗");
+    if (r.size) headText += "（zip 約 " + Math.round(r.size / 1048576) + " MB）";
+    if (r.error) headText += ": " + r.error;
+    head.appendChild(document.createTextNode(headText));
+    row.appendChild(head);
+    if (loaded && loaded.fileName && loaded.fileName.toLowerCase().indexOf(r.repo.toLowerCase() + "-web-") === 0) {
+      const m = loaded.fileName.match(/-web-(.+)\.zip$/i);
+      const loadedVer = m ? m[1] : null;
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent = loadedVer
+        ? (loadedVer === r.version ? "このブラウザで選択済み: " + loadedVer + "（最新版と同じ）" : "このブラウザで選択済み: " + loadedVer + " → 新版 " + (r.version || "") + " があります")
+        : "このブラウザで選択済み: " + loaded.fileName;
+      row.appendChild(note);
+    }
+    if (!r.error) {
+      const links = document.createElement("div");
+      const mk = (href, label) => {
+        if (!href) return;
+        const a = document.createElement("a");
+        a.href = href; a.textContent = label;
+        a.rel = "noopener";
+        links.appendChild(a);
+      };
+      mk(r.zipUrl, "Web版zipをダウンロード");
+      mk(r.shaUrl, "SHA256SUMS.txt");
+      mk(r.releaseUrl, "Releases ページ");
+      row.appendChild(links);
+    }
+    latestList.appendChild(row);
+  }
+  if (checkedAt) latestStatus.textContent = "前回チェック: " + new Date(checkedAt).toLocaleString("ja-JP") + "（公式 GitHub の情報）";
+}
+latestBtn.addEventListener("click", async () => {
+  latestBtn.disabled = true;
+  latestStatus.textContent = "公式 GitHub でアプリを探しています…";
+  const apps = await discoverApps();
+  latestStatus.textContent = "公式 GitHub を調べています…（" + apps.length + "アプリ）";
+  let done = 0;
+  const settled = await Promise.all(apps.map(async (app) => {
+    const repo = app.repo;
+    try {
+      const res = await fetch("https://api.github.com/repos/storytold/" + repo + "/releases/latest", { headers: { "Accept": "application/vnd.github+json" } });
+      if (res.status === 404) return { repo, name: app.name, version: null, error: "まだリリースがありません" };
+      if (!res.ok) throw new Error("HTTP " + res.status + (res.status === 403 || res.status === 429 ? "（GitHub API の回数制限の可能性があります。時間をおいて再試行してください）" : ""));
+      const data = await res.json();
+      const version = (data.tag_name || "").replace(/^v/, "");
+      const assets = data.assets || [];
+      const zipRe = new RegExp("^" + repo.toLowerCase() + "-web-.+\\.zip$", "i");
+      const zip = assets.find(a => zipRe.test(a.name));
+      if (!zip) return null; // リリースはあるが Web版zip が無いものはアプリとして数えない
+      const sha = assets.find(a => a.name === "SHA256SUMS.txt");
+      return { repo, name: app.name, version, size: zip.size,
+        zipUrl: zip.browser_download_url,
+        shaUrl: sha ? sha.browser_download_url : null,
+        releaseUrl: data.html_url || null, error: null };
+    } catch (e) {
+      return { repo, name: app.name, version: null, error: (e && e.message) ? e.message : String(e) };
+    } finally {
+      done++;
+      latestStatus.textContent = "公式 GitHub を調べています… " + done + " / " + apps.length;
+    }
+  }));
+  const results = settled.filter(Boolean);
+  const at = Date.now();
+  try { localStorage.setItem("artcraft-latest-cache", JSON.stringify({ at, results })); } catch (e) {}
+  renderLatest(results, null);
+  latestStatus.textContent = "チェック完了: " + new Date(at).toLocaleString("ja-JP") + "（公式 GitHub の情報、" + results.length + "アプリ）";
+  latestBtn.disabled = false;
+});
+window.addEventListener("load", () => {
+  try {
+    const cache = JSON.parse(localStorage.getItem("artcraft-latest-cache") || "null");
+    if (cache && cache.results && cache.results.length) renderLatest(cache.results, cache.at);
+  } catch (e) {}
 });
 </script>
 </body>
